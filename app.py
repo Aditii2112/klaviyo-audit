@@ -14,7 +14,7 @@ import streamlit as st
 
 from config import get_secret
 from gemini_copilot import (
-    ask_copilot,
+    ask_copilot_stream,
     dump_is_populated,
     load_dump,
     resolved_model_name,
@@ -242,17 +242,21 @@ def main() -> None:
                 }
             )
             st.rerun()
+        # Snapshot history BEFORE appending current message, so it isn't
+        # sent to Gemini twice.
+        history_snapshot = list(st.session_state.messages)
+        st.session_state.messages.append({"role": "user", "content": prompt})
+
         with st.chat_message("user"):
             st.markdown(prompt)
+
         with st.chat_message("assistant"):
-            with st.spinner("Thinking with your Klaviyo dump…"):
-                history = st.session_state.messages
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                try:
-                    reply = ask_copilot(prompt, history)
-                except Exception as exc:  # noqa: BLE001
-                    reply = f"**Copilot error:** {exc}"
+            try:
+                reply = st.write_stream(ask_copilot_stream(prompt, history_snapshot))
+            except Exception as exc:  # noqa: BLE001
+                reply = f"**Copilot error:** {exc}"
                 st.markdown(reply)
+
         st.session_state.messages.append({"role": "assistant", "content": reply})
         st.rerun()
 

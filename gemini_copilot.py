@@ -183,25 +183,25 @@ def _history_to_contents(
     return contents
 
 
-def _generate(client: genai.Client, model: str, contents: List[types.Content], system: str):
-    return client.models.generate_content(
+def _stream(client: genai.Client, model: str, contents: List[types.Content], system: str):
+    """Return a streaming response iterator."""
+    return client.models.generate_content_stream(
         model=model,
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system,
             temperature=0.4,
-            max_output_tokens=4096,
+            max_output_tokens=16000,
         ),
     )
 
 
-def ask_copilot(query: str, chat_history: Optional[list] = None) -> str:
+def ask_copilot_stream(query: str, chat_history: Optional[list] = None):
     """
-    Send a user query plus the Klaviyo dump to Gemini and return the reply text.
+    Stream the Gemini reply token-by-token.
 
-    `chat_history` is a list of {"role": "user"|"assistant", "content": "..."}
-    dicts (Streamlit session_state.messages). The current `query` should not
-    already be in that list.
+    Yields text chunks as they arrive. `chat_history` must NOT already contain
+    the current `query` — pass only prior messages.
     """
     dump = load_dump()
     context_json = compact_dump_for_model(dump)
@@ -216,7 +216,6 @@ def ask_copilot(query: str, chat_history: Optional[list] = None) -> str:
     contents = _history_to_contents(chat_history or [], query)
 
     global _RESOLVED_MODEL
-    errors: List[str] = []
     candidates = _get_model_candidates()
     models = [_RESOLVED_MODEL] if _RESOLVED_MODEL else list(candidates)
     for candidate in candidates:
@@ -226,21 +225,24 @@ def ask_copilot(query: str, chat_history: Optional[list] = None) -> str:
     last_exc: Optional[Exception] = None
     for model in models:
         try:
-            response = _generate(client, model, contents, system)
+            for chunk in _stream(client, model, contents, system):
+                if chunk.text:
+                    yield chunk.text
             _RESOLVED_MODEL = model
-            text = (response.text or "").strip()
-            if not text:
-                return "Gemini returned an empty response. Try rephrasing the question."
-            return text
-        except Exception as exc:  # noqa: BLE001 — surface model/auth errors to the UI
+            return
+        except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            errors.append(f"{model}: {exc}")
             _RESOLVED_MODEL = None
             continue
 
     raise RuntimeError(
-        "Gemini request failed for all candidate models.\n" + "\n".join(errors)
+        "Gemini request failed for all candidate models."
     ) from last_exc
+
+
+def ask_copilot(query: str, chat_history: Optional[list] = None) -> str:
+    """Non-streaming wrapper — collects the full streamed reply into a string."""
+    return "".join(ask_copilot_stream(query, chat_history))
 
 
 def resolved_model_name() -> Optional[str]:
