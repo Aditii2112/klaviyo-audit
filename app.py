@@ -12,6 +12,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from chat_store import clear_chat, init_chat_state, persist_chat
 from config import get_secret
 from gemini_copilot import (
     DEFAULT_MODEL,
@@ -84,11 +85,9 @@ def _inject_styles() -> None:
 
 
 def _run_sync() -> None:
-    log_lines: list[str] = []
     status = st.status("Syncing Klaviyo data…", expanded=True)
 
     def on_progress(message: str) -> None:
-        log_lines.append(message)
         status.write(message)
 
     try:
@@ -129,11 +128,7 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     _inject_styles()
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "pending_prompt" not in st.session_state:
-        st.session_state.pending_prompt = None
+    init_chat_state()
 
     dump = load_dump()
     summary = dump.get("account_summary") or {}
@@ -176,7 +171,7 @@ def main() -> None:
             _run_sync()
             st.rerun()
         if sync_disabled:
-            st.caption("Add `KLAVIYO_API_KEY` to `.env` to enable sync.")
+            st.caption("Add `KLAVIYO_API_KEY` to Streamlit secrets / `.env` to enable sync.")
         if st.session_state.get("last_sync_error"):
             st.error(st.session_state["last_sync_error"])
 
@@ -194,8 +189,7 @@ def main() -> None:
 
         st.divider()
         if st.button("Clear chat", use_container_width=True):
-            st.session_state.messages = []
-            st.session_state.pending_prompt = None
+            clear_chat()
             st.rerun()
 
     st.markdown('<p class="hero-kicker">Lifecycle strategy</p>', unsafe_allow_html=True)
@@ -207,16 +201,15 @@ def main() -> None:
 
     if not cache_exists:
         st.info(
-            "No Klaviyo data yet. Set `KLAVIYO_API_KEY` in `.env`, then click "
-            "**🔄 Sync Klaviyo Data** in the sidebar."
+            "No Klaviyo data yet. Click **🔄 Sync Klaviyo Data** in the sidebar."
         )
     else:
         st.caption(
-            f"Using local dump from {_format_synced_at(dump.get('synced_at'))} — "
+            f"Using dump from {_format_synced_at(dump.get('synced_at'))} — "
             "chat works from this cache; Sync only refreshes it from Klaviyo."
         )
     if not gemini_ok:
-        st.warning("Set `GEMINI_API_KEY` in `.env` to enable the copilot.")
+        st.warning("Set `GEMINI_API_KEY` in Streamlit secrets / `.env` to enable the copilot.")
 
     st.markdown("**Starter prompts**")
     cols = st.columns(3)
@@ -235,18 +228,20 @@ def main() -> None:
     if prompt:
         st.session_state.pending_prompt = None
         if not gemini_ok:
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            st.session_state.messages.append(
+            messages = list(st.session_state.messages)
+            messages.append({"role": "user", "content": prompt})
+            messages.append(
                 {
                     "role": "assistant",
-                    "content": "Add `GEMINI_API_KEY` to `.env` and restart the app.",
+                    "content": "Add `GEMINI_API_KEY` to Streamlit secrets / `.env` and restart the app.",
                 }
             )
+            persist_chat(messages)
             st.rerun()
-        # Snapshot history BEFORE appending current message, so it isn't
-        # sent to Gemini twice.
+
         history_snapshot = list(st.session_state.messages)
         st.session_state.messages.append({"role": "user", "content": prompt})
+        persist_chat(st.session_state.messages)
 
         with st.chat_message("user"):
             st.markdown(prompt)
@@ -259,6 +254,7 @@ def main() -> None:
                 st.markdown(reply)
 
         st.session_state.messages.append({"role": "assistant", "content": reply})
+        persist_chat(st.session_state.messages)
         st.rerun()
 
 

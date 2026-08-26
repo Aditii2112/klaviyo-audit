@@ -330,7 +330,7 @@ def parse_email_content(
         "template_id": meta.get("template_id"),
         "message_id": meta.get("id") or meta.get("message_id"),
         "body_text": body_text,
-        "html": html or "",
+        "html": "",  # omit raw HTML from dump (body_text + links are enough)
         "links": links,
     }
 
@@ -600,12 +600,28 @@ def run_sync(progress_callback: ProgressCallback = None) -> Dict[str, Any]:
         flows.append(parse_flow(raw, template_lookup, client, log))
 
     # Templates fetched on demand while parsing emails should also be stored.
+    # Persist a compact dump: body_text + links only (no raw HTML).
     templates = list(template_lookup.values())
+    compact_flows = []
+    for flow in flows:
+        steps = []
+        for step in flow.get("steps") or []:
+            email = step.get("email")
+            if email:
+                email = {
+                    **email,
+                    "html": "",
+                    "body_text": email.get("body_text") or "",
+                    "links": email.get("links") or [],
+                }
+            steps.append({**step, "email": email})
+        compact_flows.append({**flow, "steps": steps})
+
     dump = {
         "synced_at": datetime.now(timezone.utc).isoformat(),
         "api_revision": API_REVISION,
         "account_summary": summarize(flows, templates),
-        "flows": flows,
+        "flows": compact_flows,
         "templates": [
             {
                 "id": t.get("id"),
@@ -615,7 +631,6 @@ def run_sync(progress_callback: ProgressCallback = None) -> Dict[str, Any]:
                 "updated": t.get("updated"),
                 "body_text": t.get("body_text"),
                 "links": t.get("links"),
-                "html": t.get("html"),
             }
             for t in templates
         ],
