@@ -14,6 +14,7 @@ import streamlit as st
 
 from config import get_secret
 from gemini_copilot import (
+    DEFAULT_MODEL,
     ask_copilot_stream,
     dump_is_populated,
     load_dump,
@@ -158,8 +159,8 @@ def main() -> None:
             f"</span>",
             unsafe_allow_html=True,
         )
-        model = resolved_model_name()
-        st.caption(f"Model: `{model or 'gemini-2.5-flash'}`")
+        model = resolved_model_name() or get_secret("GEMINI_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
+        st.caption(f"Model: `{model}`")
 
         st.caption(f"Last synced: **{_format_synced_at(dump.get('synced_at'))}**")
         st.caption(f"Cache: `{DUMP_PATH.name}` {'ready' if cache_exists else 'empty — sync first'}")

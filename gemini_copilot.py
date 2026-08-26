@@ -19,8 +19,18 @@ from config import get_secret
 ROOT = Path(__file__).resolve().parent
 DUMP_PATH = ROOT / "klaviyo_dump.json"
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-FALLBACK_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
+FALLBACK_MODELS = ("gemini-3.6-flash", "gemini-3-flash-preview")
+
+
+def _get_model_candidates() -> tuple[str, ...]:
+    """Return primary + fallback model names (primary configurable via secrets)."""
+    configured = get_secret("GEMINI_MODEL", DEFAULT_MODEL) or DEFAULT_MODEL
+    ordered = [configured]
+    for candidate in (DEFAULT_MODEL, *FALLBACK_MODELS):
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return tuple(ordered)
 
 SYSTEM_PROMPT = """You are an expert Klaviyo Email Strategy Copilot. You have full context of all current email flows, message bodies, triggers, delays, and links. Your job is to:
    1. Answer audit and strategy questions about the account's lifecycle program.
@@ -40,14 +50,6 @@ Guidelines:
 _DUMP_CACHE: Dict[str, Any] = {"mtime": None, "data": None}
 _CLIENT: Optional[genai.Client] = None
 _RESOLVED_MODEL: Optional[str] = None
-
-
-def _get_model_candidates() -> tuple[str, ...]:
-    """Return (primary, fallback) model names, with primary configurable via secrets."""
-    configured = get_secret("GEMINI_MODEL", DEFAULT_MODEL)
-    if configured and configured != DEFAULT_MODEL:
-        return (configured, DEFAULT_MODEL, FALLBACK_MODEL)
-    return (DEFAULT_MODEL, FALLBACK_MODEL)
 
 
 def get_client() -> genai.Client:
@@ -223,20 +225,24 @@ def ask_copilot_stream(query: str, chat_history: Optional[list] = None):
             models.append(candidate)
 
     last_exc: Optional[Exception] = None
+    errors: List[str] = []
     for model in models:
         try:
             for chunk in _stream(client, model, contents, system):
-                if chunk.text:
-                    yield chunk.text
+                text = getattr(chunk, "text", None)
+                if text:
+                    yield text
             _RESOLVED_MODEL = model
             return
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
+            errors.append(f"{model}: {exc}")
             _RESOLVED_MODEL = None
             continue
 
+    detail = "\n".join(errors) if errors else str(last_exc)
     raise RuntimeError(
-        "Gemini request failed for all candidate models."
+        "Gemini request failed for all candidate models.\n" + detail
     ) from last_exc
 
 
